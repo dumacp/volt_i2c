@@ -1,0 +1,21 @@
+[package]
+name = "volt_i2c"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+i2cdev = { version = "0.4"}
+tokio = { version = "1", features = ["full"] }
+clap = { version = "2.33" }
+
+[dependencies.paho-mqtt]
+#git = "https://github.com/eclipse/paho.mqtt.rust.git"
+#branch = "master"
+version = "0.9.1"
+#features = [ "ssl" ]
+default-features = false
+features = [ "bundled" ]
+
+[profile.release]
