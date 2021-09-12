@@ -7,8 +7,10 @@ edition = "2018"
 
 [dependencies]
 i2cdev = { version = "0.4"}
-tokio = { version = "1", features = ["full"] }
+#tokio = { version = "1", features = ["full"] }
 clap = { version = "2.33" }
+syslog = { version = "5" }
+log = { version = "0.4" } 
 
 [dependencies.paho-mqtt]
 #git = "https://github.com/eclipse/paho.mqtt.rust.git"
@@ -18,4 +20,25 @@ version = "0.9.1"
 default-features = false
 features = [ "bundled" ]
 
+[dependencies.tokio]
+version = "1"
+features = [
+  #"fs",
+  #"io-util",
+  #"io-std",
+  "macros",
+  #"net",
+  #"parking_lot",
+  "process",
+  "rt",
+  "rt-multi-thread",
+  "signal",
+  "sync",
+  "time",
+]
+
 [profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
