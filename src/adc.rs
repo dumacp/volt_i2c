@@ -85,7 +85,7 @@ impl ADC {
  
     pub fn read_value(&mut self) -> Result<(f32, bool), LinuxI2CError> {
         let result = self.read_register_word(0x00)?;
-        println!("read_value: {:#X}", result);
+        // println!("read_value: {:#X}", result);
         let alert = (result & 0x8000) == 0x8000;
         let value = result & 0x0FFF;
         Ok(((value as f32) * 0.016, alert))

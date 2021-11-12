@@ -31,7 +31,7 @@ pub fn init_std_log(logstd: bool, appname: &str) -> Result<(), Box<dyn std::erro
     if !logstd {
         let logger = syslog::unix(formatter)?;
         log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
-            .map(|()| log::set_max_level(LevelFilter::Debug))?
+            .map(|()| log::set_max_level(LevelFilter::Info))?
     } else {
         log::set_logger(&LOGGER)
             .map(|()| log::set_max_level(LevelFilter::Debug))?

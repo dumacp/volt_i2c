@@ -47,11 +47,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("logSdt")
+                .short("l")
+                .long("logStd")
+                .help("send logs to stderr")
+        )
+        .arg(
             Arg::with_name("version")
                 .short("v")
                 .long("version")
-                .value_name("version")
-                .help("ahow version"),
+                .help("show version"),
         )
         .get_matches();
 
