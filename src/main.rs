@@ -14,7 +14,7 @@ use tokio::time::Duration;
 use log::{debug, error, info, warn};
 
 const APPNAME: &'static str = "volt";
-const VERSION: &'static str = "1.0.0";
+const VERSION: &'static str = "1.0.2";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .arg(
             Arg::with_name("version")
-                .short("v")
+                .short("version")
                 .long("version")
                 .help("show version"),
         )
@@ -274,7 +274,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let msg = mqtt::Message::new(
                 "EVENTS/volt",
                 format!(
-                    r#"{{"timeStamp": {}, "value": {}, "type": "alert_volt"#,
+                    r#"{{"timeStamp": {}, "value": {}, "type": "alert_volt"}}"#,
                     nsec, received.min
                 ),
                 0,
