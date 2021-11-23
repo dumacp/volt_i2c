@@ -14,7 +14,7 @@ use tokio::time::Duration;
 use log::{debug, error, info, warn};
 
 const APPNAME: &'static str = "volt";
-const VERSION: &'static str = "1.0.2";
+const VERSION: &'static str = "1.0.3";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -271,6 +271,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         };
 
         if received.min < LOWEST_VALUE {
+            warn!("alert_volt -> {}", received.min);
             let msg = mqtt::Message::new(
                 "EVENTS/volt",
                 format!(
@@ -284,6 +285,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 error!("Error sending message: {:?}", e);
             }
         } else if received.max > HIHGEST_VALUE {
+            warn!("alert_volt -> {}", received.max);
             let msg = mqtt::Message::new(
                 "EVENTS/volt",
                 format!(
@@ -297,6 +299,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 error!("Error sending message: {:?}", e);
             }
         } else if min_old > received.min {
+            warn!("lowest_volt -> {}", received.min);
             min_old = received.min;
             let msg = mqtt::Message::new(
                 "EVENTS/volt",
@@ -311,6 +314,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 error!("Error sending message: {:?}", e);
             }
         } else if max_old < received.max {
+            warn!("highest_volt -> {}", received.max);
             max_old = received.max;
             let msg = mqtt::Message::new(
                 "EVENTS/volt",
