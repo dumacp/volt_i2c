@@ -14,7 +14,7 @@ use tokio::time::Duration;
 use log::{debug, error, info, warn};
 
 const APPNAME: &'static str = "volt";
-const VERSION: &'static str = "1.0.3";
+const VERSION: &'static str = "1.0.5";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -28,6 +28,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .long("underRange")
                 .value_name("under_range")
                 .help("Set alert under range value")
+                .default_value("9.5")
                 .takes_value(true),
         )
         .arg(
@@ -36,6 +37,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .long("overRange")
                 .value_name("over_range")
                 .help("Set alert over range value")
+                .default_value("50.0")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("hysteresis-value")
+                .short("i")
+                .long("hysValue")
+                .value_name("hys_value")
+                .help("Set hysteresis value")
+                .default_value("1.0")
                 .takes_value(true),
         )
         .arg(
@@ -44,10 +55,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .long("timeout")
                 .value_name("timeout")
                 .help("Set timeout value in secs")
+                .default_value("30")
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("logSdt")
+            Arg::with_name("logStd")
                 .short("l")
                 .long("logStd")
                 .help("send logs to stderr")
@@ -73,15 +85,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let timeout: u64 = clap::value_t!(args.value_of("timeout"), u64).unwrap_or(30);
     let over_range: f32 = clap::value_t!(args.value_of("alert-over-range"), f32).unwrap_or(50.0);
     let under_range: f32 = clap::value_t!(args.value_of("alert-under-range"), f32).unwrap_or(9.5);
+    let hys_value: f32 = clap::value_t!(args.value_of("hysteresis-value"), f32).unwrap_or(1.0);
 
     println!("alert over range: {}", over_range);
     println!("alert under range: {}", under_range);
+    println!("hysteresis value: {}", hys_value);
 
     let mut term = signal(SignalKind::terminate())?;
     let mut inte = signal(SignalKind::interrupt())?;
 
-    const LOWEST_VALUE: f32 = 9.5;
-    const HIHGEST_VALUE: f32 = 50.0;
+    // const LOWEST_VALUE: f32 = 9.5;
+    // const HIHGEST_VALUE: f32 = 50.0;
 
     #[derive(Debug)]
     struct Values {
@@ -97,7 +111,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let flags = FlagRegister::AlertFlagEnable as u8
         | FlagRegister::AlertPINEnable as u8
-        | FlagRegister::Tx32 as u8;
+        | FlagRegister::Tx32 as u8
+        | FlagRegister::AlertHold as u8;
 
     let mut dev = ADC::new()?;
 
@@ -107,7 +122,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     dev.set_conf_register(flags)?;
     dev.set_alert_over_range(over_range)?;
     dev.set_alert_under_range(under_range)?;
-    dev.set_alert_hysteresis(0x005D)?;
+    dev.set_alert_hysteresis(hys_value)?;
 
     let (result, alert) = dev.read_value()?;
     println!("volt now: {}", result);
@@ -150,7 +165,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let (tx, mut rx) = mpsc::channel(32);
-    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    let mut tick = tokio::time::interval(Duration::from_secs(5));
     tokio::spawn(async move {
         let mut min_old = 0.0;
         let mut max_old = 0.0;
@@ -204,20 +219,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         return ()
                     }
 
-                    // if alter_hold is enables comment outcarg
-                    // if alert {
-                    //     dev.clear_alerts().unwrap_or_else(|error| {
-                    //         warn!("ADC read_max_value error: {}", error);
-                    //         ()
-                    //     });
-                    // }
-                    if min < LOWEST_VALUE && current > LOWEST_VALUE {
+                    // if alter_hold is enables comment out
+                    if alert {
+                        dev.clear_alerts().unwrap_or_else(|error| {
+                            warn!("ADC read_max_value error: {}", error);
+                            ()
+                        });
+                    }
+                    if min < under_range && current > under_range {
                         dev.write_min_value(50.0).unwrap_or_else(|error| {
                             warn!("ADC write_min_value error: {}", error);
                             ()
                         });
                     }
-                    if max > HIHGEST_VALUE && current < HIHGEST_VALUE {
+                    if max > over_range && current < over_range {
                         dev.write_max_value(1.0).unwrap_or_else(|error| {
                             warn!("ADC write_max_value error: {}", error);
                             ()
@@ -234,6 +249,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
+    let mut alert_over = false;
+    let mut alert_under = false;
     let mut old_time = time::SystemTime::now();
     while let Some(received) = rx.recv().await {
         let nsec = match time::SystemTime::now().duration_since(time::UNIX_EPOCH) {
@@ -252,6 +269,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     old_time = time::SystemTime::now();
                     debug!("Publishing a message on the 'EVENTS/volt' topic");
                     debug!("Got: {:?}", received);
+                    println!("current_volt: {}", received.current);
                     //let msg = mqtt::Message::new("test", "Hello world!", 0);
                     let msg = mqtt::Message::new(
                         "EVENTS/volt",
@@ -270,7 +288,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Err(_) => {}
         };
 
-        if received.min < LOWEST_VALUE {
+        if received.alert_under && !alert_under {
+            println!("alert_volt: {}", received.min);
             warn!("alert_volt -> {}", received.min);
             let msg = mqtt::Message::new(
                 "EVENTS/volt",
@@ -284,7 +303,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             if let Err(e) = tok.wait() {
                 error!("Error sending message: {:?}", e);
             }
-        } else if received.max > HIHGEST_VALUE {
+        }
+        alert_under = received.alert_under;
+
+        if received.alert_over && !alert_over {
+            println!("alert_volt: {}", received.max);
             warn!("alert_volt -> {}", received.max);
             let msg = mqtt::Message::new(
                 "EVENTS/volt",
@@ -298,9 +321,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             if let Err(e) = tok.wait() {
                 error!("Error sending message: {:?}", e);
             }
-        } else if min_old > received.min {
+        }
+        alert_over = received.alert_over;
+
+        if min_old > received.min {
             warn!("lowest_volt -> {}", received.min);
-            min_old = received.min;
+            min_old = received.min - hys_value;            
             let msg = mqtt::Message::new(
                 "EVENTS/volt",
                 format!(
@@ -312,10 +338,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let tok = cli.publish(msg);
             if let Err(e) = tok.wait() {
                 error!("Error sending message: {:?}", e);
-            }
-        } else if max_old < received.max {
+            }            
+        }
+        if max_old  < received.max {
             warn!("highest_volt -> {}", received.max);
-            max_old = received.max;
+            max_old = received.max + hys_value;
+           
             let msg = mqtt::Message::new(
                 "EVENTS/volt",
                 format!(
@@ -327,7 +355,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let tok = cli.publish(msg);
             if let Err(e) = tok.wait() {
                 error!("Error sending message: {:?}", e);
-            }
+            }                  
         }
     }
 

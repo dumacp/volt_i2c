@@ -36,19 +36,22 @@ impl ADC {
 
     pub fn set_alert_under_range(&mut self, value: f32) -> Result<(), LinuxI2CError> {
 
-        let value_u = (value/0.016).round() as u16 & 0x0FFF;    self.dev.smbus_write_word_data(0x03, value_u.to_be())?;
+        let value_u = (value/0.016).round() as u16 & 0x0FFF;    
+        self.dev.smbus_write_word_data(0x03, value_u.to_be())?;
         Ok(())
     }
 
     pub fn set_alert_over_range(&mut self, value: f32) -> Result<(), LinuxI2CError> {
 
-        let value_u = (value/0.016).round() as u16 & 0x0FFF;      self.dev.smbus_write_word_data(0x04, value_u.to_be())?;
+        let value_u = (value/0.016).round() as u16 & 0x0FFF;      
+        self.dev.smbus_write_word_data(0x04, value_u.to_be())?;
         Ok(())
     }
 
-    pub fn set_alert_hysteresis(&mut self, value: u16) -> Result<(), LinuxI2CError> {
+    pub fn set_alert_hysteresis(&mut self, value: f32) -> Result<(), LinuxI2CError> {
 
-        self.dev.smbus_write_word_data(0x05, value.to_be())?;
+        let value_u = (value/0.016).round() as u16 & 0x0FFF;
+        self.dev.smbus_write_word_data(0x05, value_u.to_be())?;
         Ok(())
     }
 
