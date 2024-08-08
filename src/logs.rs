@@ -5,7 +5,7 @@ struct SimpleLogger;
 
 impl log::Log for SimpleLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= Level::Info
+        metadata.level() <= Level::Debug
     }
 
     fn log(&self, record: &Record) {
@@ -19,7 +19,7 @@ impl log::Log for SimpleLogger {
 
 static LOGGER: SimpleLogger = SimpleLogger;
 
-pub fn init_std_log(logstd: bool, appname: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn init_std_log(logstd: bool, debug: bool, appname: &str) -> Result<(), Box<dyn std::error::Error>> {
     
     let formatter = Formatter3164 {
         facility: Facility::LOG_USER,
@@ -33,8 +33,13 @@ pub fn init_std_log(logstd: bool, appname: &str) -> Result<(), Box<dyn std::erro
         log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
             .map(|()| log::set_max_level(LevelFilter::Info))?
     } else {
+        let level_filter = if debug {
+            LevelFilter::Debug
+        } else {
+            LevelFilter::Info
+        };
         log::set_logger(&LOGGER)
-            .map(|()| log::set_max_level(LevelFilter::Debug))?
+            .map(|()| log::set_max_level(level_filter))?
     }
     Ok(())
 }

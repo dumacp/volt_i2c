@@ -10,16 +10,18 @@ use std::process;
 use tokio;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc;
-use tokio::time::Duration;
+use tokio::time::{Duration,sleep};
 use log::{debug, error, info, warn};
+use evdev::{Device, InputEventKind, Key};
 
 const APPNAME: &'static str = "volt";
-const VERSION: &'static str = "1.0.5";
+
+const VERSION: Option<&str> = option_env!("CARGO_PKG_VERSION");
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = App::new("volt")
-        .version("1.0")
+        .version(VERSION.unwrap_or("unknown"))
         .author("soporte <soporte@nebulae.com.co>")
         .about("ADC sensor")
         .arg(
@@ -55,7 +57,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .long("timeout")
                 .value_name("timeout")
                 .help("Set timeout value in secs")
-                .default_value("30")
+                .default_value("60")
                 .takes_value(true),
         )
         .arg(
@@ -63,6 +65,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .short("l")
                 .long("logStd")
                 .help("send logs to stderr")
+        )
+        .arg(
+            Arg::with_name("debug")
+                .short("d")
+                .long("debug")
+                .help("debug level")
         )
         .arg(
             Arg::with_name("version")
@@ -73,14 +81,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .get_matches();
 
     let logstd = args.is_present("logStd");
+    let debug = args.is_present("debug");
     let version = args.is_present("version");
     if version {
-        println!("version: {}", VERSION);
-        process::exit(-2);
+        println!("version: {}", VERSION.unwrap_or("unknown"));
+        process::exit(1);
     }
-    info!(r#"runnin "{}", version "{}""#, APPNAME, VERSION);
 
-    logs::init_std_log(logstd, APPNAME)?;
+   
+
+    logs::init_std_log(logstd, debug, APPNAME)?;
+    info!(r#"runnin "{}", version "{}""#, APPNAME, VERSION.unwrap_or("unknown"));
 
     let timeout: u64 = clap::value_t!(args.value_of("timeout"), u64).unwrap_or(30);
     let over_range: f32 = clap::value_t!(args.value_of("alert-over-range"), f32).unwrap_or(50.0);
@@ -111,12 +122,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let flags = FlagRegister::AlertFlagEnable as u8
         | FlagRegister::AlertPINEnable as u8
-        | FlagRegister::Tx32 as u8
-        | FlagRegister::AlertHold as u8;
+        | FlagRegister::Tx32 as u8;
+        // | FlagRegister::AlertHold as u8;
 
+    sleep(Duration::from_millis(100)).await;
     let mut dev = ADC::new()?;
 
-    let result = dev.read_register_byte(0x00).unwrap();
+    let result = dev.read_register_byte(0x00)?;
     println!("register: {}", result);
 
     dev.set_conf_register(flags)?;
@@ -165,13 +177,103 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let (tx, mut rx) = mpsc::channel(32);
-    let mut tick = tokio::time::interval(Duration::from_secs(5));
+    let mut tick = tokio::time::interval(Duration::from_secs(3));
+    
+
+    //evedev
+    let filename: &str = args.value_of("filepath").unwrap_or("/dev/input/event0");
+    let device = Device::open(filename)?;
+    let evdev_with_keypro2 = device.supported_keys().map_or(false, |keys| {
+        log::info!("key: {:?}", keys);
+        !keys.contains(Key::KEY_PROG2)
+    });
+
+    let mut events = device.into_event_stream()?;
+
     tokio::spawn(async move {
         let mut min_old = 0.0;
         let mut max_old = 0.0;
         let mut current_old = 0.0;
         loop {
             tokio::select! {
+
+               event = events.next_event() => {
+                    match event {
+                        Ok(ev) => {
+                            let kind = ev.kind();
+                            if let InputEventKind::Key(key) = kind {
+                                match key {
+                                    Key::KEY_PROG2 => {
+                                        let min = dev.read_min_value().unwrap_or_else(|error| {
+                                            warn!("ADC read_min_value error: {}", error);
+                                            -1.0
+                                        });
+                                        let (current, _) = dev.read_value().unwrap_or_else(|error| {
+                                            warn!("ADC read_value error: {}", error);
+                                            (-1.0, false)
+                                        });                                        
+                                        warn!("ADC alert: {}, volt: {}, min: {}", ev.value(), current, min);
+                                        let value = Values{
+                                            current: current,
+                                            min: if min > -1.0 {
+                                                min
+                                            } else if current > -1.0 {
+                                                current
+                                            } else {
+                                                -1.0
+                                            },
+                                            max: max_old,
+                                            alert_over: false,
+                                            alert_under: ev.value() != 0,
+                                        };
+                                        if let Err(err) = tx.send(value).await {
+                                            error!("event err: {}", err);
+                                            tx.closed().await;
+                                            return ();
+                                        }                                    
+                                    }
+                                    Key::KEY_PROG1 => {
+                                        if !evdev_with_keypro2 {
+                                            let min = dev.read_min_value().unwrap_or_else(|error| {
+                                                warn!("ADC read_min_value error: {}", error);
+                                                -1.0
+                                            });
+                                            let (current, _) = dev.read_value().unwrap_or_else(|error| {
+                                                warn!("ADC read_value error: {}", error);
+                                                (-1.0, false)
+                                            });
+                                            
+                                            warn!("ADC alert: {}, volt: {}, min: {}", ev.value(), current, min);
+                                            let value = Values{
+                                                current: current,
+                                                min: if min > -1.0 {
+                                                    min
+                                                } else if current > -1.0 {
+                                                    current
+                                                } else {
+                                                    -1.0
+                                                },
+                                                max: max_old,
+                                                alert_over: false,
+                                                alert_under: ev.value() != 0,
+                                            };
+                                            if let Err(err) = tx.send(value).await {
+                                                error!("event err: {}", err);
+                                                tx.closed().await;
+                                                return ();
+                                            }
+                                        }             
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            warn!("event err: {}", err);
+                        }
+                    }                   
+                },   
+                                
                 _ = term.recv() => {
                     let _ = tx.closed();
                     error!("Received SIGTERM kill signal. Exiting...");
@@ -219,13 +321,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         return ()
                     }
 
-                    // if alter_hold is enables comment out
-                    if alert {
-                        dev.clear_alerts().unwrap_or_else(|error| {
-                            warn!("ADC read_max_value error: {}", error);
-                            ()
-                        });
-                    }
+                    // // if alter_hold is enables comment out
+                    // if alert {
+                    //     dev.clear_alerts().unwrap_or_else(|error| {
+                    //         warn!("ADC read_max_value error: {}", error);
+                    //         ()
+                    //     });
+                    // }
                     if min < under_range && current > under_range {
                         dev.write_min_value(50.0).unwrap_or_else(|error| {
                             warn!("ADC write_min_value error: {}", error);
@@ -264,7 +366,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let elapse = old_time.elapsed();
         match elapse {
             Ok(value) => {
-                if value > time::Duration::from_secs(timeout) {
+                if value > time::Duration::from_secs(timeout) && received.current > 0.0 {
                     debug!("1970-01-01 00:00:00 UTC was {} seconds ago!", nsec);
                     old_time = time::SystemTime::now();
                     debug!("Publishing a message on the 'EVENTS/volt' topic");
@@ -272,7 +374,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     println!("current_volt: {}", received.current);
                     //let msg = mqtt::Message::new("test", "Hello world!", 0);
                     let msg = mqtt::Message::new(
-                        "EVENTS/volt",
+                        "VOLT",
                         format!(
                             r#"{{"timeStamp": {}, "value": {}, "type": "current_volt"}}"#,
                             nsec, received.current
@@ -286,16 +388,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             Err(_) => {}
-        };
+        };   
 
-        if received.alert_under && !alert_under {
-            println!("alert_volt: {}", received.min);
-            warn!("alert_volt -> {}", received.min);
+        if received.alert_under != alert_under {
+            if received.min >= 0.0 {
+                println!("alert_volt min: {}", received.min);
+                warn!("alert_volt min -> {}", received.min);
+            }
             let msg = mqtt::Message::new(
                 "EVENTS/volt",
                 format!(
-                    r#"{{"timeStamp": {}, "value": {}, "type": "alert_volt"}}"#,
-                    nsec, received.min
+                    r#"{{"timeStamp": {}, "value": {{ "value": {}, "active": {} }}, "type": "alert_status_volt"}}"#,
+                    nsec, if received.alert_under { received.min } else { received.current }, received.alert_under,
                 ),
                 0,
             );
@@ -306,14 +410,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         alert_under = received.alert_under;
 
-        if received.alert_over && !alert_over {
-            println!("alert_volt: {}", received.max);
-            warn!("alert_volt -> {}", received.max);
+        if received.alert_over != alert_over {
+            println!("alert_volt max: {}", received.max);
+            warn!("alert_volt max-> {}", received.max);
+           
             let msg = mqtt::Message::new(
                 "EVENTS/volt",
                 format!(
-                    r#"{{"timeStamp": {}, "value": {}", "type": "alert_volt"}}"#,
-                    nsec, received.max
+                    r#"{{"timeStamp": {}, "value": {{ "value": {}, "active": {} }}, "type": "alert_status_volt"}}"#,
+                    nsec, if received.alert_over { received.max } else { received.current }, received.alert_over,
                 ),
                 0,
             );
@@ -324,11 +429,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         alert_over = received.alert_over;
 
-        if min_old > received.min {
+        if received.min > 0.0 && min_old > received.min {
             warn!("lowest_volt -> {}", received.min);
             min_old = received.min - hys_value;            
             let msg = mqtt::Message::new(
-                "EVENTS/volt",
+                "VOLT",
                 format!(
                     r#"{{"timeStamp": {}, "value": {}, "type": "lowest_volt"}}"#,
                     nsec, received.min
@@ -343,9 +448,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         if max_old  < received.max {
             warn!("highest_volt -> {}", received.max);
             max_old = received.max + hys_value;
-           
+        
             let msg = mqtt::Message::new(
-                "EVENTS/volt",
+                "VOLT",
                 format!(
                     r#"{{"timeStamp": {}, "value": {}, "type": "highest_volt"}}"#,
                     nsec, received.max
